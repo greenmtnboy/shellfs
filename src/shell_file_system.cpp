@@ -234,11 +234,12 @@ namespace duckdb
 			throw IOException("Could not read from pipe \"%s\": %s", {{"errno", std::to_string(errno)}}, handle.path,
 												strerror(errno));
 		}
-		if (bytes_read == 0)
+		if (bytes_read == 0 && feof(pipe))
 		{
-			// Since the last read() returned 0 bytes, presume that EOF has been encountered, and rather than
-			// having the close, by doing this if there are errors with the pipe they are caught in the query
-			// rather than in the destructor.
+			// Only close the pipe if we've reached EOF. On Windows, _popen() can return 0 bytes
+			// temporarily when buffers aren't ready, even though more data is coming. Using feof()
+			// ensures we only close when the stream has actually ended, preventing premature closure
+			// that would truncate Arrow IPC streams and other binary data formats.
 			handle.Close();
 		}
 		return bytes_read;
