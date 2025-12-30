@@ -23,6 +23,12 @@ namespace duckdb
 		// When writing to a PIPE ignore the SIGPIPE error and consider that the write succeeded.
 		config.AddExtensionOption("ignore_sigpipe", "Ignore SIGPIPE", LogicalType::BOOLEAN, Value(false));
 
+		// Use legacy pipe close behavior (close on zero-byte read without checking feof).
+		// This option exists to demonstrate the Windows bug where _popen() can return 0 bytes
+		// temporarily when buffers aren't ready. Setting this to true reproduces the bug.
+		config.AddExtensionOption("use_legacy_pipe_close", "Use legacy pipe close behavior (for testing Windows bug)", 
+		                          LogicalType::BOOLEAN, Value(false));
+
 		QueryFarmSendTelemetry(loader, "shellfs", "2025123001");
 	}
 

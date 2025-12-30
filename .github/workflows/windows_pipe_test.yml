@@ -1,0 +1,73 @@
+name: Windows Pipe Bug Test
+on:
+  push:
+    branches:
+      - main
+      - 'copilot/**'
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows-pipe-test:
+    name: Test Windows Pipe Behavior
+    runs-on: windows-latest
+    
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: 'recursive'
+      
+      - name: Setup DuckDB Build Environment
+        shell: bash
+        run: |
+          git submodule update --init --recursive
+      
+      - name: Build Extension (Release)
+        shell: bash
+        run: |
+          make release
+      
+      - name: Run Standard Tests
+        shell: bash
+        run: |
+          build/release/test/unittest "test/sql/shellfs.test"
+      
+      - name: Run Arrow Pipe Test
+        shell: bash
+        run: |
+          build/release/test/unittest "test/sql/arrow_pipe.test"
+      
+      - name: Run Windows Bug Regression Test (Fixed Behavior)
+        shell: bash
+        run: |
+          build/release/test/unittest "test/sql/windows_bug_regression.test"
+      
+      - name: Test Legacy Behavior with Large Dataset (Should Potentially Fail)
+        shell: bash
+        continue-on-error: true
+        run: |
+          # This test uses the legacy flag to demonstrate the bug
+          # It may fail on Windows with large datasets due to zero-byte reads
+          build/release/duckdb -c "
+          LOAD './build/release/extension/shellfs/shellfs.duckdb_extension';
+          SET use_legacy_pipe_close = true;
+          SELECT COUNT(*), SUM(column0) FROM read_csv('powershell -Command \"1..50000 | ForEach-Object { Write-Output \\\"\\$_,\\$_\\\" }\" |');
+          " || echo "Legacy behavior failed as expected on Windows with large dataset"
+      
+      - name: Test Fixed Behavior with Large Dataset (Should Succeed)
+        shell: bash
+        run: |
+          # This test uses the fixed behavior - should succeed even with large datasets
+          build/release/duckdb -c "
+          LOAD './build/release/extension/shellfs/shellfs.duckdb_extension';
+          SET use_legacy_pipe_close = false;
+          SELECT COUNT(*), SUM(column0) FROM read_csv('powershell -Command \"1..50000 | ForEach-Object { Write-Output \\\"\\$_,\\$_\\\" }\" |');
+          "
+      
+      - name: Report Results
+        shell: bash
+        if: always()
+        run: |
+          echo "Windows pipe testing completed"
+          echo "The legacy behavior (use_legacy_pipe_close=true) may fail with large datasets"
+          echo "The fixed behavior (use_legacy_pipe_close=false, default) should succeed"

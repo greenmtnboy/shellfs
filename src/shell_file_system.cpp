@@ -138,14 +138,16 @@ namespace duckdb
 		friend class ShellFileSystem;
 
 	public:
-		ShellFileHandle(FileSystem &file_system, string path, FILE *pipe, FileOpenFlags flags)
-				: FileHandle(file_system, std::move(path), std::move(flags)), pipe(pipe)
+		ShellFileHandle(FileSystem &file_system, string path, FILE *pipe, FileOpenFlags flags, optional_ptr<FileOpener> opener)
+				: FileHandle(file_system, std::move(path), std::move(flags)), pipe(pipe), opener(opener)
 		{
 			allowed_exit_codes.insert(0);
 		}
 
-		ShellFileHandle(FileSystem &file_system, string path, FILE *pipe, FileOpenFlags flags, std::unordered_set<int> allowed_exit_codes)
-				: FileHandle(file_system, std::move(path), std::move(flags)), pipe(pipe), allowed_exit_codes(std::move(allowed_exit_codes))
+		ShellFileHandle(FileSystem &file_system, string path, FILE *pipe, FileOpenFlags flags, 
+		                std::unordered_set<int> allowed_exit_codes, optional_ptr<FileOpener> opener)
+				: FileHandle(file_system, std::move(path), std::move(flags)), pipe(pipe), 
+				  allowed_exit_codes(std::move(allowed_exit_codes)), opener(opener)
 		{
 		}
 		~ShellFileHandle() override
@@ -163,6 +165,7 @@ namespace duckdb
 	private:
 		FILE *pipe;
 		std::unordered_set<int> allowed_exit_codes;
+		optional_ptr<FileOpener> opener;
 
 	public:
 		void Close() override
@@ -221,7 +224,8 @@ namespace duckdb
 
 	int64_t ShellFileSystem::Read(FileHandle &handle, void *buffer, int64_t nr_bytes)
 	{
-		FILE *pipe = handle.Cast<ShellFileHandle>().pipe;
+		auto &shell_handle = handle.Cast<ShellFileHandle>();
+		FILE *pipe = shell_handle.pipe;
 
 		if (!pipe)
 		{
@@ -234,13 +238,29 @@ namespace duckdb
 			throw IOException("Could not read from pipe \"%s\": %s", {{"errno", std::to_string(errno)}}, handle.path,
 												strerror(errno));
 		}
-		if (bytes_read == 0 && feof(pipe))
+		if (bytes_read == 0)
 		{
-			// Only close the pipe if we've reached EOF. On Windows, _popen() can return 0 bytes
-			// temporarily when buffers aren't ready, even though more data is coming. Using feof()
-			// ensures we only close when the stream has actually ended, preventing premature closure
-			// that would truncate Arrow IPC streams and other binary data formats.
-			handle.Close();
+			// Check if we should use legacy behavior (for testing the Windows bug)
+			bool use_legacy_close = false;
+			if (shell_handle.opener)
+			{
+				Value value;
+				if (FileOpener::TryGetCurrentSetting(shell_handle.opener, "use_legacy_pipe_close", value))
+				{
+					use_legacy_close = value.GetValue<bool>();
+				}
+			}
+
+			// Legacy behavior: close immediately on zero-byte read (reproduces Windows bug)
+			// Fixed behavior: only close when feof() confirms we've reached EOF
+			if (use_legacy_close || feof(pipe))
+			{
+				// Only close the pipe if we've reached EOF. On Windows, _popen() can return 0 bytes
+				// temporarily when buffers aren't ready, even though more data is coming. Using feof()
+				// ensures we only close when the stream has actually ended, preventing premature closure
+				// that would truncate Arrow IPC streams and other binary data formats.
+				handle.Close();
+			}
 		}
 		return bytes_read;
 	}
@@ -299,7 +319,7 @@ namespace duckdb
 				throw IOException("Could not open pipe for writing \"%s\": %s", {{"errno", std::to_string(errno)}}, path,
 													strerror(errno));
 			}
-			result = make_uniq<ShellFileHandle>(*this, path, pipe, flags);
+			result = make_uniq<ShellFileHandle>(*this, path, pipe, flags, opener);
 		}
 		else
 		{
@@ -316,7 +336,7 @@ namespace duckdb
 				throw IOException("Could not open pipe for reading \"%s\": %s", {{"errno", std::to_string(errno)}}, path,
 													strerror(errno));
 			}
-			result = make_uniq<ShellFileHandle>(*this, path, pipe, flags, parsed.allowed_exit_codes);
+			result = make_uniq<ShellFileHandle>(*this, path, pipe, flags, parsed.allowed_exit_codes, opener);
 		}
 
 #ifndef _WIN32
