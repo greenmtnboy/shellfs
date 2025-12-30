@@ -138,7 +138,8 @@ namespace duckdb
 		friend class ShellFileSystem;
 
 	public:
-		ShellFileHandle(FileSystem &file_system, string path, FILE *pipe, FileOpenFlags flags, optional_ptr<FileOpener> opener)
+		ShellFileHandle(FileSystem &file_system, string path, FILE *pipe, FileOpenFlags flags, 
+		                optional_ptr<FileOpener> opener)
 				: FileHandle(file_system, std::move(path), std::move(flags)), pipe(pipe), opener(opener)
 		{
 			allowed_exit_codes.insert(0);

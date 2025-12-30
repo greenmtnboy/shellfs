@@ -11,6 +11,8 @@ jobs:
   windows-pipe-test:
     name: Test Windows Pipe Behavior
     runs-on: windows-latest
+    permissions:
+      contents: read
     
     steps:
       - uses: actions/checkout@v3
