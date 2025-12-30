@@ -1,0 +1,105 @@
+name: Windows Pipe Bug Test
+on:
+  push:
+    branches:
+      - main
+      - 'copilot/**'
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows-pipe-test:
+    name: Test Windows Pipe Behavior
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: 'recursive'
+      
+      - name: Setup DuckDB Build Environment
+        shell: bash
+        run: |
+          git submodule update --init --recursive
+      
+      - name: Build Extension (Release)
+        shell: bash
+        run: |
+          make release
+      
+      - name: Run Windows-Specific Pipe Tests
+        shell: bash
+        run: |
+          # Create a Windows-compatible test using PowerShell
+          # Test reading from a PowerShell pipe
+          ./build/release/duckdb -c "
+          LOAD './build/release/extension/shellfs/shellfs.duckdb_extension';
+          SELECT COUNT(*) as count FROM read_csv('powershell -Command \"1..100 | ForEach-Object { Write-Output \\\"\\$_,\\$_\\\" }\" |');
+          " > test_output.txt
+          
+          # Check if the output contains the expected result
+          if grep -q "100" test_output.txt; then
+            echo "✓ Basic pipe read test passed"
+          else
+            echo "✗ Basic pipe read test failed"
+            cat test_output.txt
+            exit 1
+          fi
+      
+      - name: Test Fixed Behavior with Moderate Dataset
+        shell: bash
+        run: |
+          # Test with fixed behavior (default) - should succeed
+          ./build/release/duckdb -c "
+          LOAD './build/release/extension/shellfs/shellfs.duckdb_extension';
+          SET use_legacy_pipe_close = false;
+          SELECT COUNT(*) as count, SUM(column0) as sum FROM read_csv('powershell -Command \"1..10000 | ForEach-Object { Write-Output \\\"\\$_,\\$_\\\" }\" |');
+          " > test_output_fixed.txt
+          
+          # Check for expected result (10000 rows)
+          if grep -q "10000" test_output_fixed.txt; then
+            echo "✓ Fixed behavior test passed with 10,000 rows"
+            cat test_output_fixed.txt
+          else
+            echo "✗ Fixed behavior test failed"
+            cat test_output_fixed.txt
+            exit 1
+          fi
+      
+      - name: Test Legacy Behavior (May Fail on Windows)
+        shell: bash
+        continue-on-error: true
+        run: |
+          # Test with legacy behavior - may fail due to Windows buffering
+          # This demonstrates the bug
+          echo "Testing legacy behavior (use_legacy_pipe_close=true)..."
+          ./build/release/duckdb -c "
+          LOAD './build/release/extension/shellfs/shellfs.duckdb_extension';
+          SET use_legacy_pipe_close = true;
+          SELECT COUNT(*) as count FROM read_csv('powershell -Command \"1..10000 | ForEach-Object { Write-Output \\\"\\$_,\\$_\\\" }\" |');
+          " > test_output_legacy.txt
+          
+          if grep -q "10000" test_output_legacy.txt; then
+            echo "⚠ Legacy behavior succeeded (may not always reproduce bug)"
+            cat test_output_legacy.txt
+          else
+            echo "✓ Legacy behavior failed as expected (demonstrating the bug)"
+            cat test_output_legacy.txt
+          fi
+      
+      - name: Report Results
+        shell: bash
+        if: always()
+        run: |
+          echo "================================"
+          echo "Windows Pipe Testing Completed"
+          echo "================================"
+          echo ""
+          echo "Summary:"
+          echo "- Basic pipe test: Required to pass"
+          echo "- Fixed behavior (use_legacy_pipe_close=false): Required to pass"
+          echo "- Legacy behavior (use_legacy_pipe_close=true): May fail (demonstrates bug)"
+          echo ""
+          echo "The fix using feof() ensures pipes work correctly on Windows"

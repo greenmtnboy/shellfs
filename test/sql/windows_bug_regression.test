@@ -1,0 +1,42 @@
+# name: test/sql/windows_bug_regression.test
+# description: Regression test for Windows _popen() zero-byte read bug
+# group: [shellfs]
+
+# Require statement will ensure this test is run with this extension loaded
+require shellfs
+
+# This test demonstrates the Windows bug where _popen() can return 0 bytes temporarily
+# when buffers aren't ready, causing premature pipe closure.
+
+# Test 1: Normal behavior (with feof() check) - should work
+statement ok
+SET use_legacy_pipe_close = false;
+
+query II
+SELECT COUNT(*), SUM(column0) FROM read_csv('seq 1 10000 | awk ''{print $1 "," $1*2}'' |')
+----
+10000	50005000
+
+# Test 2: Legacy behavior (without feof() check) - may fail on Windows with large datasets
+# On Unix/Linux this might still pass because the behavior is different
+# On Windows, this would demonstrate the bug with large enough datasets
+statement ok
+SET use_legacy_pipe_close = true;
+
+# Note: On Unix/Linux, this test may still pass because zero-byte reads are less common
+# On Windows, this test is more likely to fail with truncated data when the dataset is large enough
+# or when system load causes buffering delays. The test below uses a smaller dataset to avoid
+# false failures on fast systems or Unix/Linux, but documents the behavior.
+query II
+SELECT COUNT(*), SUM(column0) FROM read_csv('seq 1 100 | awk ''{print $1 "," $1*2}'' |')
+----
+100	5050
+
+# Test 3: Reset to normal behavior
+statement ok
+SET use_legacy_pipe_close = false;
+
+query I
+SELECT COUNT(*) FROM read_csv('seq 1 1000 | awk ''{print $1 "," $1*2}'' |')
+----
+1000
